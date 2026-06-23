@@ -31,13 +31,15 @@ import httpx
 # %%
 ROOT = Path(_setup.__file__).resolve().parent.parent
 proc = subprocess.Popen(
-    ["uvicorn", "app.main:app", "--port", "8000", "--log-level", "warning"],
+    ["uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000", "--log-level", "warning"],
     cwd=str(ROOT),
 )
 
-# Đợi server up + warm (Searcher.from_corpus loads embeddings + indexes 1000 docs)
-URL = "http://localhost:8000"
-for _ in range(60):
+# Đợi server up + warm (Searcher.from_corpus loads embeddings + indexes 1000 docs).
+# Dùng 127.0.0.1 thay vì localhost: trên Windows, localhost có thể resolve sang
+# IPv6 (::1) trong khi uvicorn bind IPv4 → connection refused. 127.0.0.1 chắc chắn.
+URL = "http://127.0.0.1:8000"
+for _ in range(90):
     try:
         r = httpx.get(f"{URL}/healthz", timeout=2.0)
         if r.status_code == 200 and r.json().get("ready"):
@@ -46,7 +48,7 @@ for _ in range(60):
         pass
     time.sleep(1)
 else:
-    raise RuntimeError("API didn't become ready within 60s")
+    raise RuntimeError("API didn't become ready within 90s")
 
 print(httpx.get(f"{URL}/healthz").json())
 
@@ -83,6 +85,14 @@ def percentile(values: list[float], p: float) -> float:
     if n == 0:
         return 0.0
     return sorted(values)[min(int(n * p), n - 1)]
+
+
+# Warm-up: fire a handful of requests per mode so the rubric's "after warm-up"
+# P99 isn't polluted by first-call cold paths (ONNX session, BM25 cache, etc.).
+for _mode in ("keyword", "semantic", "hybrid"):
+    for _q in golden[:10]:
+        httpx.get(f"{URL}/search", params={"q": _q["query"], "mode": _mode})
+print("warm-up done (30 calls)")
 
 
 def benchmark_mode(mode: str, reps: int = 2) -> dict[str, float]:

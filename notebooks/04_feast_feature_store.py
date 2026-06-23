@@ -183,9 +183,13 @@ else:
 
 # %%
 import pandas as pd
+# PIT correctness: mỗi entity row chỉ "thấy" feature có event_timestamp <= timestamp
+# của nó (within TTL). Profile event của u_{i} nằm ở NOW - i giờ (make_user_profile),
+# nên query timestamp phải >= mốc đó, nếu không Feast (đúng) loại row để tránh leakage.
+# Stagger query ts nhưng vẫn >= feature ts của từng user → cả 3 row đều có match.
 entity_df = pd.DataFrame({
     "user_id": ["u_001", "u_002", "u_003"],
-    "event_timestamp": [NOW - timedelta(hours=2), NOW - timedelta(hours=1), NOW],
+    "event_timestamp": [NOW, NOW - timedelta(hours=1), NOW - timedelta(hours=2)],
 })
 
 historical = fs.get_historical_features(
@@ -195,7 +199,10 @@ historical = fs.get_historical_features(
         "user_profile_features:topic_affinity",
     ],
 ).to_df()
+historical = historical.sort_values("user_id").reset_index(drop=True)
 print(historical)
+print(f"\nPIT join returned {len(historical)} rows × {historical.shape[1]} columns")
+assert len(historical) == 3, f"expected 3 PIT rows, got {len(historical)}"
 
 # %% [markdown]
 # ## Deliverable evidence
